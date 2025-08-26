@@ -1,10 +1,8 @@
 import pandas as pd
-import numpy as np
 import yfinance as yf
 from pandas_datareader import data as pdr
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import seaborn as sns
 
 
 def fetch_prices(symbol, start="2000-01-01", end="2015-12-31") -> pd.Series:
@@ -40,35 +38,8 @@ def fetch_rf_daily(start="2000-01-01", end="2015-12-31") -> pd.Series:
     except Exception:
         rf = None
 
-    # Fallback to 3M constant-maturity
     if rf is None or rf.empty:
-        try:
-            s = pdr.DataReader("DGS3MO", "fred", start=start, end=end).squeeze("columns")
-            if s is not None and not s.empty:
-                rf = s.rename("DGS3MO")
-        except Exception:
-            pass
-
-    # Fallback to 3M T-bill secondary market rate (discount basis, still in percent)
-    if rf is None or rf.empty:
-        try:
-            s = pdr.DataReader("DTB3", "fred", start=start, end=end).squeeze("columns")
-            if s is not None and not s.empty:
-                rf = s.rename("DTB3")
-        except Exception:
-            pass
-
-    # Final fallback: Yahoo ^IRX (CBOE 13-week T-bill rate, percent)
-    if rf is None or rf.empty:
-        try:
-            hist = yf.Ticker("^IRX").history(start=start, end=end, auto_adjust=False)
-            if hist is not None and not hist.empty:
-                rf = hist["Close"].rename("^IRX")
-        except Exception:
-            pass
-
-    if rf is None or rf.empty:
-        raise RuntimeError("Could not retrieve risk-free series from FRED/Yahoo for the given dates.")
+        raise RuntimeError("Could not retrieve risk-free series from FRED for the given dates.")
 
     # Convert to per-day decimal to match the rest of the pipeline:
     # percent -> decimal -> divide by 252 to get 'per trading day'
