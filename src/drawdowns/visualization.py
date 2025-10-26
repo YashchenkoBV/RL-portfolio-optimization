@@ -10,15 +10,25 @@ def mds_embed(distance: pd.DataFrame, random_state: int = 0) -> pd.DataFrame:
     Returns a DataFrame with columns ['x','y'] indexed by metric name.
     """
     D = distance.values
-    mds = MDS(
-        n_components=2,
-        dissimilarity="precomputed",
-        random_state=random_state,
-        n_init=4,
-        max_iter=300,
-        normalized_stress="auto" if hasattr(MDS, "normalized_stress") else "deprecated",
-    )
-    X = mds.fit_transform(D)  # shape: (n_metrics, 2)
+    # Try with normalized_stress (newer sklearn); fall back if param unsupported
+    try:
+        mds = MDS(
+            n_components=2,
+            dissimilarity="precomputed",
+            random_state=random_state,
+            n_init=4,
+            max_iter=300,
+            normalized_stress="auto",
+        )
+    except TypeError:
+        mds = MDS(
+            n_components=2,
+            dissimilarity="precomputed",
+            random_state=random_state,
+            n_init=4,
+            max_iter=300,
+        )
+    X = mds.fit_transform(D)
     coords = pd.DataFrame(X, index=distance.index, columns=["x", "y"])
     return coords
 

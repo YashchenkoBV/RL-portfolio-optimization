@@ -42,14 +42,19 @@ def fisher_z_average(corrs: dict) -> pd.DataFrame:
     if not corrs:
         return pd.DataFrame()
 
-    # stack each window's corr into long form (a,b) -> r_t
     z_list = []
     for t, C in corrs.items():
         C = C.copy()
         # drop diagonal to avoid arctanh(1)
         np.fill_diagonal(C.values, np.nan)
-        r = C.stack(dropna=False)  # MultiIndex (a,b)
-        r = r.clip(-0.999999, 0.999999)  # guard against ±1
+
+        # Stack to long form (a,b) -> r_t
+        try:
+            r = C.stack(future_stack=True)  # pandas ≥ 2.1 (no dropna param allowed)
+        except TypeError:
+            r = C.stack()                   # older pandas (default dropna behavior)
+
+        r = r.clip(-0.999999, 0.999999)    # guard against ±1
         z = np.arctanh(r)
         z.name = t
         z_list.append(z)
@@ -63,6 +68,7 @@ def fisher_z_average(corrs: dict) -> pd.DataFrame:
     R = rbar.unstack().reindex(index=metrics, columns=metrics)
     np.fill_diagonal(R.values, 1.0)
     return R
+
 
 def correlation_distance(corr_matrix: pd.DataFrame) -> pd.DataFrame:
     """
