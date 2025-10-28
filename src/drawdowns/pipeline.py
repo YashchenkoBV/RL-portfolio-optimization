@@ -15,9 +15,9 @@ from calculate_metrics import (
     compute_calmar, compute_csi, compute_cii,
     get_benchmark_prices, compute_beta, compute_r2, compute_tracking_error,
     compute_information_ratio, compute_alpha, compute_treynor,
-    compute_up_capture, compute_down_capture,
+    compute_up_capture, compute_down_capture, compute_ced_from_mdd_panel,
 )
-from correlation import compute_corr_and_distance
+from correlation import compute_corr_and_distance, correlation_distance, add_scalar_metric_to_corr
 from clustering import agglomerative_cluster
 from visualization import embed_and_plot, pca_embed, plot_clusters_mds
 
@@ -29,6 +29,7 @@ MIN_VALID_FRAC = 0.9
 N_CLUSTERS = 5
 LINKAGE = "average"  # {"average","complete","single"} for precomputed distances
 RANDOM_STATE = 0
+CED_ALPHA = 0.95
 # --------------------------------------------
 
 BAD_METRICS = {
@@ -139,18 +140,21 @@ def main():
     # fetch benchmark once (aligned later inside metric functions)
     bench_prices = get_benchmark_prices(prices)
 
-    panel = build_panel(prices, bench_prices)  # rows: window_end; cols: (metric, ticker)
-    panel = orient_panel(panel)  # higher = better orientation
+    panel = build_panel(prices, bench_prices)
+    panel_or = orient_panel(panel)
 
-    R, D = compute_corr_and_distance(panel)  # Fisher-z avg Spearman -> R, then distance D
-    # sanitize distance matrix (iterative pruning)
+    mdd_panel = panel.xs("MDD_pct", axis=1, level=0)
+    ced = compute_ced_from_mdd_panel(mdd_panel, alpha=CED_ALPHA).rename("CED")
+
+    R, _ = compute_corr_and_distance(panel_or)
+    R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-ced, name="CED", agg="mean")  # <- uses -ced
+    D = correlation_distance(R)
     D, removed = sanitize_distance(D)
     if removed:
         print("[info] dropped metrics due to NaNs:", list(removed))
     if D.shape[0] < 2:
         raise RuntimeError("Distance matrix degenerated after sanitization; check data/metrics coverage.")
 
-    # guard cluster count
     n_clusters = min(N_CLUSTERS, D.shape[0])
     labels, _ = agglomerative_cluster(D, n_clusters=n_clusters, linkage=LINKAGE)
 

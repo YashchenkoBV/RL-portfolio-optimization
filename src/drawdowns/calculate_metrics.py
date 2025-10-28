@@ -24,6 +24,7 @@ __all__ = [
     "compute_treynor",
     "compute_up_capture",
     "compute_down_capture",
+    "compute_ced_from_mdd_panel",
 ]
 
 
@@ -484,3 +485,26 @@ def compute_down_capture(
         return pd.Series(np.nan, index=r.columns)
     # Down-capture is typically reported as positive (>100% worse than market); sign comes out positive here
     return num / den
+
+
+def compute_ced_from_mdd_panel(mdd_panel: pd.DataFrame, alpha: float = 0.95) -> pd.Series:
+    """
+    Conditional Expected Drawdown (percent) from a per-window MDD panel.
+    """
+    if not (0.0 < alpha < 1.0):
+        raise ValueError("alpha must be in (0,1).")
+
+    out = {}
+    for c in mdd_panel.columns:
+        x = mdd_panel[c].dropna().to_numpy()
+        m = x.size
+        if m == 0:
+            out[c] = np.nan
+            continue
+        k = int(np.floor(m * (1.0 - alpha)))
+        if k < 1:
+            k = 1
+
+        idx = np.argpartition(x, -k)[-k:]
+        out[c] = float(x[idx].mean())
+    return pd.Series(out)
