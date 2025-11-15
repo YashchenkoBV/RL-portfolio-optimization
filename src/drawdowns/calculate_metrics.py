@@ -25,6 +25,7 @@ __all__ = [
     "compute_up_capture",
     "compute_down_capture",
     "compute_ced_from_mdd_panel",
+    "compute_cdd",
 ]
 
 
@@ -508,3 +509,62 @@ def compute_ced_from_mdd_panel(mdd_panel: pd.DataFrame, alpha: float = 0.95) -> 
         idx = np.argpartition(x, -k)[-k:]
         out[c] = float(x[idx].mean())
     return pd.Series(out)
+
+
+def compute_cdd(prices: pd.DataFrame, alpha: float = 0.95) -> pd.Series:
+    """
+    Conditional Drawdown at level alpha (CDD_alpha) in % per ticker.
+    Definition (Chekhlov–Uryasev–Zabarankin):
+      - r_t = simple return (P_t / P_{t-1} - 1).
+      - w_k = sum_{l=1..k} r_l  (uncompounded cumulative returns; w_0 = 0).
+      - xi_k = max_{0<=j<=k} w_j - w_k  (drawdown series, >= 0).
+      - CDD_alpha = tail-mean of {xi_k} at level alpha with exact discrete weighting:
+          zeta = inf{s : F_xi(s) >= alpha}  (alpha-quantile, left-continuous),
+          pi   = #{xi_k <= zeta}/N,
+          CDD  = ((pi - alpha)/(1-alpha))*zeta + (1/((1-alpha)*N)) * sum_{xi_k > zeta} xi_k.
+    Returns positive percentage values (xi * 100).
+    """
+    if not (0.0 <= alpha < 1.0):
+        raise ValueError("alpha must be in [0, 1).")
+
+    out = {}
+    for c in prices.columns:
+        p = prices[c].dropna()
+        if p.size < 2:
+            out[c] = np.nan
+            continue
+
+        # simple returns within window
+        r = p.pct_change().dropna().to_numpy(dtype=float)
+        if r.size == 0:
+            out[c] = np.nan
+            continue
+
+        # uncompounded cumulative path w_k (w_0=0 is enforced by the max with 0 below)
+        w = np.cumsum(r)
+
+        # drawdown series xi_k = max_{j<=k} w_j - w_k, with baseline w_0=0
+        m = np.maximum.accumulate(np.maximum(0.0, w))
+        xi = m - w  # length N
+
+        N = xi.size
+        if N == 0:
+            out[c] = np.nan
+            continue
+
+        # paper’s alpha-quantile: zeta = x_{(ceil(alpha*N))}, left-continuous empirical CDF
+        srt = np.sort(xi)
+        k = int(np.ceil(alpha * N))
+        k = 1 if k < 1 else k  # guard alpha=0 -> take minimum element
+        zeta = float(srt[k - 1])
+
+        # pi(zeta) = #{xi <= zeta}/N (handle float comparisons directly)
+        pi = float((xi <= zeta).sum()) / float(N)
+
+        # sum over strictly greater than zeta
+        tail_sum = float(xi[xi > zeta].sum())
+
+        cdd = ((pi - alpha) / (1.0 - alpha)) * zeta + (tail_sum / ((1.0 - alpha) * N))
+        out[c] = 100.0 * cdd  # percent
+
+    return pd.Series(out, index=prices.columns, dtype=float)

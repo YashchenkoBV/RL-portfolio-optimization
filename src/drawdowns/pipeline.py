@@ -16,6 +16,7 @@ from calculate_metrics import (
     get_benchmark_prices, compute_beta, compute_r2, compute_tracking_error,
     compute_information_ratio, compute_alpha, compute_treynor,
     compute_up_capture, compute_down_capture, compute_ced_from_mdd_panel,
+    compute_cdd,
 )
 from correlation import compute_corr_and_distance, correlation_distance, add_scalar_metric_to_corr
 from clustering import agglomerative_cluster
@@ -30,10 +31,11 @@ N_CLUSTERS = 5
 LINKAGE = "average"  # {"average","complete","single"} for precomputed distances
 RANDOM_STATE = 0
 CED_ALPHA = 0.95
+CDD_ALPHA = 0.95
 # --------------------------------------------
 
 BAD_METRICS = {
-    "Vol", "VaR95", "ES95", "MDD_pct", "UlcerIndex", "AvgDD", "MaxDD_Dur", "AvgDD_Dur", "CII", "TE",
+    "Vol", "VaR95", "ES95", "MDD_pct", "UlcerIndex", "AvgDD", "MaxDD_Dur", "AvgDD_Dur", "CII", "TE", "CDD"
 }
 
 
@@ -54,6 +56,7 @@ def window_metrics(wdf: pd.DataFrame, bench_prices: pd.Series | None = None) -> 
     cal = compute_calmar(wdf).rename("Calmar")
     csi = compute_csi(wdf).rename("CSI")
     cii = compute_cii(wdf).rename("CII")
+    cdd = compute_cdd(wdf, alpha=CDD_ALPHA).rename("CDD")
 
     # benchmark-relative metrics (SPY by default if bench_prices is None)
     beta = compute_beta(wdf, bench_prices=bench_prices).rename("Beta")
@@ -72,6 +75,7 @@ def window_metrics(wdf: pd.DataFrame, bench_prices: pd.Series | None = None) -> 
             "VaR95": var95, "ES95": es95, "MDD_pct": mdd, "UlcerIndex": ui,
             "AvgDD": add, "MaxDD_Dur": mdd_d, "AvgDD_Dur": add_d,
             "Calmar": cal, "CSI": csi, "CII": cii,
+            "CDD": cdd,
             # benchmarks appended in fixed order
             "Beta": beta, "R2": r2, "TE": te, "IR": ir,
             "Alpha": alpha, "Treynor": trey,
