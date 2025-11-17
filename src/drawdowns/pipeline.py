@@ -150,7 +150,7 @@ def main():
     # Compute CDD
     mdd_panel = panel.xs("MDD_pct", axis=1, level=0)
     ced = compute_ced_from_mdd_panel(mdd_panel, alpha=CED_ALPHA).rename("CED")
-    #dar = compute_dar_from_mdd_panel(mdd_panel, alpha=CED_ALPHA).rename("DaR")
+    dar = compute_dar_from_mdd_panel(mdd_panel, alpha=CED_ALPHA).rename("DaR")
 
     # Compute MCED
     mdd_demeaned_panel = panel.xs("MDD_demeaned_pct", axis=1, level=0)
@@ -158,8 +158,8 @@ def main():
 
     R, _ = compute_corr_and_distance(panel_or)
     R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-ced, name="CED", agg="mean")
-    #R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-dar, name="DaR", agg="mean")
-    # R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-mced, name="MCED", agg="mean")
+    R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-dar, name="DaR", agg="mean")
+    R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-mced, name="MCED", agg="mean")
     D = correlation_distance(R)
     D, removed = sanitize_distance(D)
     if removed:

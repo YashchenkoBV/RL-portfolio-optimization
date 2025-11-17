@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+_SCALAR_METRICS: dict[str, pd.Series] = {}
+
 __all__ = [
     "compute_window_spearman",
     "fisher_z_average",
@@ -23,14 +25,21 @@ def add_scalar_metric_to_corr(
         min_tickers: int = 3,
 ) -> pd.DataFrame:
     """
-    Augment an existing metric correlation matrix R with one scalar-per-ticker metric (e.g. CED, MCED).
+    Augment an existing metric correlation matrix R with one scalar-per-ticker
+    metric (e.g. CED, MCED, DaR).
 
-    R: metric×metric correlation matrix.
-    panel_oriented: rolling panel (windows × (metric, ticker)).
-    scalar: Series[ticker] with one scalar per asset.
-    name: new metric name (row/column label in R).
+    R : metric × metric Spearman correlation matrix (metrics = rows/cols).
+    panel_oriented : rolling panel, index = window_end, columns = (metric, ticker).
+    scalar : Series[ticker] with one scalar per asset (already oriented if needed).
+    name : new metric name to add as row/column in R.
 
-    Robust to repeated calls: only uses metrics that exist in panel_oriented.
+    Math:
+      - Correlation between the scalar metric and each rolling metric m is
+        Spearman rank correlation between:
+            v_m(ticker) = (mean or median over windows of panel_oriented[:, (m, ticker)])
+            s(ticker)   = scalar[ticker]
+      - Correlation between two scalar metrics (e.g. CED and MCED) is Spearman
+        rank correlation between their scalar Series across tickers.
     """
     if agg not in {"mean", "median"}:
         raise ValueError("agg must be 'mean' or 'median'.")
@@ -38,19 +47,33 @@ def add_scalar_metric_to_corr(
     if not isinstance(panel_oriented.columns, pd.MultiIndex):
         raise ValueError("panel_oriented must have MultiIndex columns (metric, ticker).")
 
+    # Normalize scalar index to string tickers and store it in the registry
+    s_scalar = scalar.astype(float).copy()
+    s_scalar.index = s_scalar.index.astype(str)
+    _SCALAR_METRICS[name] = s_scalar
+
+    # Metrics present in the rolling panel (genuine rolling metrics)
     panel_metrics = panel_oriented.columns.get_level_values(0).unique()
+    # Metrics currently represented in the correlation matrix
     corr_metrics = R.index
-    # Only compute cross-corr with genuine rolling metrics
+
+    # Rolling metrics for which we can use panel_oriented
     base_metrics = corr_metrics.intersection(panel_metrics)
+    # Existing scalar metrics (already added previously)
+    scalar_metrics_existing = [m for m in corr_metrics if m not in panel_metrics]
 
     rho = {}
+
+    # 1) Correlation vs rolling metrics (via panel_oriented)
     for m in base_metrics:
-        X = panel_oriented.loc[:, (m, slice(None))]  # windows × (m, ticker)
+        X = panel_oriented.loc[:, (m, slice(None))]     # windows × (m, ticker)
         if isinstance(X.columns, pd.MultiIndex):
-            X.columns = X.columns.get_level_values(1)  # columns -> tickers
+            X.columns = X.columns.get_level_values(1)   # columns -> tickers
 
         v = X.mean(axis=0, skipna=True) if agg == "mean" else X.median(axis=0, skipna=True)
-        s = scalar.reindex(v.index)
+        v.index = v.index.astype(str)
+
+        s = s_scalar.reindex(v.index)
         mask = v.notna() & s.notna()
         if int(mask.sum()) < min_tickers:
             rho[m] = np.nan
@@ -63,19 +86,53 @@ def add_scalar_metric_to_corr(
         denom = float(np.sqrt((r1c ** 2).sum() * (r2c ** 2).sum()))
         rho[m] = float((r1c * r2c).sum() / denom) if denom > 0.0 else np.nan
 
-    # Build the new correlation vector (length = len(R.index))
-    s = pd.Series(np.nan, index=corr_metrics, dtype=float)
-    for m in base_metrics:
-        s[m] = rho.get(m, np.nan)
+    # 2) Correlation vs existing scalar metrics (directly from scalar Series)
+    for m in scalar_metrics_existing:
+        s_other = _SCALAR_METRICS.get(m)
+        if s_other is None:
+            continue
+        s_other = s_other.astype(float)
+
+        # Align on common tickers
+        idx = s_scalar.index.intersection(s_other.index)
+        if idx.size < min_tickers:
+            rho[m] = np.nan
+            continue
+
+        u = s_scalar.loc[idx]
+        v = s_other.loc[idx]
+        mask = u.notna() & v.notna()
+        if int(mask.sum()) < min_tickers:
+            rho[m] = np.nan
+            continue
+
+        r1 = u[mask].rank(method="average").to_numpy()
+        r2 = v[mask].rank(method="average").to_numpy()
+        r1c = r1 - r1.mean()
+        r2c = r2 - r2.mean()
+        denom = float(np.sqrt((r1c ** 2).sum() * (r2c ** 2).sum()))
+        rho[m] = float((r1c * r2c).sum() / denom) if denom > 0.0 else np.nan
+
+    # 3) Build full correlation vector for the new metric (one entry per existing metric)
+    s_vec = pd.Series(np.nan, index=corr_metrics, dtype=float)
+    for m in corr_metrics:
+        if m in rho:
+            s_vec[m] = rho[m]
 
     R2 = R.copy()
-    R2[name] = s
-    R2.loc[name] = s.reindex(R2.columns)
+    # Add new column
+    R2[name] = s_vec
+    # Add new row (symmetric)
+    R2.loc[name] = s_vec.reindex(R2.columns)
+    # Set self-correlation to 1
     R2.loc[name, name] = 1.0
 
+    # Enforce symmetry and unit diagonal
     R2 = 0.5 * (R2 + R2.T)
     np.fill_diagonal(R2.values, 1.0)
     return R2
+
+
 
 
 def compute_window_spearman(panel: pd.DataFrame) -> dict:
