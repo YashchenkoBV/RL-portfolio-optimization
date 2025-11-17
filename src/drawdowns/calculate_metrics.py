@@ -26,6 +26,8 @@ __all__ = [
     "compute_down_capture",
     "compute_ced_from_mdd_panel",
     "compute_cdd",
+    "compute_mced_mdd",
+    "compute_dar_from_mdd_panel",
 ]
 
 
@@ -163,6 +165,53 @@ def compute_mdd(prices: pd.DataFrame) -> pd.Series:
     """
     dd = _drawdown_fraction(prices)
     return (-dd.min(skipna=True)) * 100.0
+
+
+def compute_mced_mdd(prices: pd.DataFrame) -> pd.Series:
+    """
+    'MCED-style' Maximum Drawdown (percent) per ticker based on demeaned simple returns.
+
+    For each asset in the window:
+      - r_t = simple return (P_t / P_{t-1} - 1).
+      - r~_t = r_t - mean(r_t)  (demeaned within the window).
+      - w_k = sum_{l=1..k} r~_l  (uncompounded cumulative demeaned returns).
+      - drawdown_k = max_{j<=k} w_j - w_k, with running peak anchored at 0.
+      - MDD_demeaned = max_k drawdown_k * 100  (positive percent).
+
+    This is the per-window maximum drawdown of the demeaned path; the MCED
+    for each ticker is then the tail mean of this quantity across windows.
+    """
+    out: dict[str, float] = {}
+
+    for c in prices.columns:
+        p = prices[c].dropna()
+        if p.size < 2:
+            out[c] = np.nan
+            continue
+
+        # simple returns within the window
+        r = p.pct_change().dropna().to_numpy(dtype=float)
+        if r.size == 0:
+            out[c] = np.nan
+            continue
+
+        # demeaned returns and cumulative path
+        mu = r.mean()
+        rd = r - mu
+        w = np.cumsum(rd)
+
+        if w.size == 0:
+            out[c] = np.nan
+            continue
+
+        # running peak anchored at 0, then drawdowns
+        peak = np.maximum.accumulate(np.maximum(0.0, w))
+        dd = peak - w  # nonnegative drawdown series
+        mdd_demeaned = float(dd.max()) if dd.size > 0 else np.nan
+
+        out[c] = 100.0 * mdd_demeaned  # percent
+
+    return pd.Series(out, index=prices.columns, dtype=float)
 
 
 def compute_ulcer_index(prices: pd.DataFrame) -> pd.Series:
@@ -508,6 +557,30 @@ def compute_ced_from_mdd_panel(mdd_panel: pd.DataFrame, alpha: float = 0.95) -> 
 
         idx = np.argpartition(x, -k)[-k:]
         out[c] = float(x[idx].mean())
+    return pd.Series(out)
+
+
+def compute_dar_from_mdd_panel(mdd_panel: pd.DataFrame, alpha: float = 0.95) -> pd.Series:
+    """
+    Drawdown-at-Risk (DaR) in percent from a per-window MDD panel.
+
+    For each ticker (column) in mdd_panel, this returns the empirical
+    alpha-quantile of its window-wise maximum drawdowns. In the CED
+    notation, this corresponds to the drawdown threshold DT_alpha:
+        DT_alpha(mu(X)) = inf{ m : P(mu(X) > m) <= 1 - alpha }.
+    """
+    if not (0.0 < alpha < 1.0):
+        raise ValueError("alpha must be in (0,1).")
+
+    out: dict[str, float] = {}
+    for c in mdd_panel.columns:
+        x = mdd_panel[c].dropna().to_numpy()
+        m = x.size
+        if m == 0:
+            out[c] = np.nan
+            continue
+        # empirical alpha-quantile (upper tail threshold)
+        out[c] = float(np.quantile(x, alpha))
     return pd.Series(out)
 
 

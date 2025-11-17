@@ -16,13 +16,12 @@ from calculate_metrics import (
     get_benchmark_prices, compute_beta, compute_r2, compute_tracking_error,
     compute_information_ratio, compute_alpha, compute_treynor,
     compute_up_capture, compute_down_capture, compute_ced_from_mdd_panel,
-    compute_cdd,
+    compute_cdd, compute_mced_mdd, compute_dar_from_mdd_panel
 )
 from correlation import compute_corr_and_distance, correlation_distance, add_scalar_metric_to_corr
 from clustering import agglomerative_cluster
 from visualization import embed_and_plot, pca_embed, plot_clusters_mds
 
-# --------- globals (edit as needed) ---------
 DATA_PATH = "data/company_prices.csv"
 WINDOW = 63  # primary lens (~1 quarter); change to 42/126 for sensitivity
 STEP = 1
@@ -32,10 +31,9 @@ LINKAGE = "average"  # {"average","complete","single"} for precomputed distances
 RANDOM_STATE = 0
 CED_ALPHA = 0.95
 CDD_ALPHA = 0.95
-# --------------------------------------------
 
 BAD_METRICS = {
-    "Vol", "VaR95", "ES95", "MDD_pct", "UlcerIndex", "AvgDD", "MaxDD_Dur", "AvgDD_Dur", "CII", "TE", "CDD"
+    "Vol", "VaR95", "ES95", "MDD_pct", "MDD_demeaned_pct", "UlcerIndex", "AvgDD", "MaxDD_Dur", "AvgDD_Dur", "CII", "TE", "CDD"
 }
 
 
@@ -49,6 +47,7 @@ def window_metrics(wdf: pd.DataFrame, bench_prices: pd.Series | None = None) -> 
     es95 = compute_es(wdf, alpha=0.95, log=True).rename("ES95")
 
     mdd = compute_mdd(wdf).rename("MDD_pct")
+    mdd_dem = compute_mced_mdd(wdf).rename("MDD_demeaned_pct")
     ui = compute_ulcer_index(wdf).rename("UlcerIndex")
     add = compute_avg_drawdown(wdf).rename("AvgDD")
     mdd_d = compute_max_dd_duration(wdf).rename("MaxDD_Dur")
@@ -76,6 +75,7 @@ def window_metrics(wdf: pd.DataFrame, bench_prices: pd.Series | None = None) -> 
             "AvgDD": add, "MaxDD_Dur": mdd_d, "AvgDD_Dur": add_d,
             "Calmar": cal, "CSI": csi, "CII": cii,
             "CDD": cdd,
+            "MDD_demeaned_pct": mdd_dem,
             # benchmarks appended in fixed order
             "Beta": beta, "R2": r2, "TE": te, "IR": ir,
             "Alpha": alpha, "Treynor": trey,
@@ -147,11 +147,19 @@ def main():
     panel = build_panel(prices, bench_prices)
     panel_or = orient_panel(panel)
 
+    # Compute CDD
     mdd_panel = panel.xs("MDD_pct", axis=1, level=0)
     ced = compute_ced_from_mdd_panel(mdd_panel, alpha=CED_ALPHA).rename("CED")
+    #dar = compute_dar_from_mdd_panel(mdd_panel, alpha=CED_ALPHA).rename("DaR")
+
+    # Compute MCED
+    mdd_demeaned_panel = panel.xs("MDD_demeaned_pct", axis=1, level=0)
+    mced = compute_ced_from_mdd_panel(mdd_demeaned_panel, alpha=CED_ALPHA).rename("MCED")
 
     R, _ = compute_corr_and_distance(panel_or)
-    R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-ced, name="CED", agg="mean")  # <- uses -ced
+    R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-ced, name="CED", agg="mean")
+    #R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-dar, name="DaR", agg="mean")
+    # R = add_scalar_metric_to_corr(R, panel_oriented=panel_or, scalar=-mced, name="MCED", agg="mean")
     D = correlation_distance(R)
     D, removed = sanitize_distance(D)
     if removed:
