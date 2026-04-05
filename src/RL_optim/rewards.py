@@ -18,10 +18,7 @@ def _get_values(ctx, include_current=True, window=None):
     vals = list(h.get("value", []))
 
     if include_current:
-        v = float(ctx["value"])
-        if len(vals) == 0 or vals[-1] != v:
-            vals.append(v)
-
+        vals.append(float(ctx["value"]))
     if window is not None and len(vals) > window:
         vals = vals[-int(window):]
 
@@ -64,6 +61,10 @@ def reward_log_growth_minus_cii(ctx, W=60, lam=1.0, eta=0.0):
 
 def reward_log_growth_plus_delta_csi(ctx, W=60, alpha=1.0, eta=0.0):
     # log_growth + alpha * (CSI_t - CSI_{t-1})/100 - eta * turnover
+    # During warmup (fewer than W values), delta is undefined — fall back to log_growth only
+    vals = _get_values(ctx, include_current=True, window=W)
+    if vals.shape[0] < W:
+        return float(ctx["log_growth"]) - float(eta) * float(ctx["turnover"])
     csi_t = _csi_from_ctx(ctx, window=W, include_current=True)
     csi_prev = _csi_from_ctx(ctx, window=W, include_current=False)
     delta = (csi_t - csi_prev) / 100.0
