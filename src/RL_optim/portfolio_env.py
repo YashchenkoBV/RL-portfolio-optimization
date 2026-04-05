@@ -195,13 +195,15 @@ class PortfolioEnv(gym.Env):
         self.history["dd"].append(self.dd)
 
         # advance time
-        self.w_prev = w
+        w_after = w * (1 + r)
+        w_sum = w_after.sum()
+        self.w_prev = w_after / w_sum if sum > 0 else w
         self.t += 1
 
         terminated = (self.t >= self.end)
         truncated = False
 
-        obs = self._get_obs() if not terminated else self._get_obs()
+        obs = self._get_obs()
         info = {
             "t": self.t,
             "date": self.dates[self.t] if self.t < len(self.dates) else self.dates[-1],
