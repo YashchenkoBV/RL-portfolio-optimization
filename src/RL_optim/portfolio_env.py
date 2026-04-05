@@ -197,7 +197,7 @@ class PortfolioEnv(gym.Env):
         # advance time
         w_after = w * (1 + r)
         w_sum = w_after.sum()
-        self.w_prev = w_after / w_sum if sum > 0 else w
+        self.w_prev = w_after / w_sum if w_sum > 0 else w
         self.t += 1
 
         terminated = (self.t >= self.end)
