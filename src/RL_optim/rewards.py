@@ -37,7 +37,7 @@ def _csi_1d(values):
     L = np.tri(n, k=0, dtype=bool)
     s = (M & L).sum(axis=1) - 1
     num = float(s.sum())
-    den = float(n * (n + 1) / 2.0)
+    den = float(n * (n - 1) / 2.0)
     return 100.0 * (num / den)
 
 

@@ -158,6 +158,9 @@ class PortfolioEnv(gym.Env):
         # REWARD SECTION
         log_growth = float(np.log(max(self.value / v_prev, 1e-12)))
 
+        # determine whether the terminal bonus is needed
+        terminated = (self.t + 1 >= self.end)
+
         # All we might need to calculate reward
         ctx = {
             "t": self.t,
@@ -174,6 +177,7 @@ class PortfolioEnv(gym.Env):
             "drawdown": self.dd,
             "log_growth": log_growth,
             "history": self.history,
+            "is_terminal": terminated,
         }
 
         if self.reward_fn is None:

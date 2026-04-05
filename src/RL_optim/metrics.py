@@ -146,7 +146,7 @@ def compute_csi(prices: pd.DataFrame) -> pd.Series:
         L = np.tri(n, k=0, dtype=bool)  # restrict to j <= i
         s = (M & L).sum(axis=1) - 1
         num = s.sum()
-        den = n * (n + 1) / 2.0
+        den = n * (n - 1) / 2.0
         out[c] = 100.0 * (num / den)
     return pd.Series(out)
 
