@@ -68,9 +68,8 @@ class PortfolioEnv(gym.Env):
         self.random_start = bool(random_start)
         self.initial_value = float(initial_value)
 
-        # range (price indices)
         self.base_start = self.window if start_idx is None else int(start_idx)
-        self.base_end = (self.T - 1) if end_idx is None else int(end_idx)  # inclusive price index
+        self.base_end = (self.T - 1) if end_idx is None else int(end_idx)
 
         assert self.base_start >= self.window, "start_idx must be >= window"
         assert self.base_end <= self.T - 1, "end_idx must be <= last price index"
@@ -78,7 +77,7 @@ class PortfolioEnv(gym.Env):
 
         self.rng = np.random.RandomState(seed)
 
-        # spaces (SB3-friendly: flat obs)
+        # Feature and observation spaces
         feat_dim = self._feature_dim()
         obs_dim = feat_dim + self.N + 1  # features + prev weights + drawdown
         self.observation_space = spaces.Box(
@@ -104,7 +103,7 @@ class PortfolioEnv(gym.Env):
 
         self.start, self.end = self._sample_episode_range()
 
-        self.t = self.start  # current price index
+        self.t = self.start
         self.value = self.initial_value
         self.peak = self.initial_value
         self.dd = 0.0
@@ -129,30 +128,37 @@ class PortfolioEnv(gym.Env):
             raise RuntimeError("Episode is over. Call reset().")
 
         w = self._softmax(action).astype(np.float64)
-        r = self.simple_ret[self.t]  # returns for interval t->t+1
+        r = self.simple_ret[self.t]  # returns for interval t -> t+1
 
         port_ret = float(np.dot(w, r))
         turnover = float(np.sum(np.abs(w - self.w_prev)))
 
-        cost = self._cost_amount(turnover)
-        cost_mult = max(0.0, 1.0 - cost)  # simple wealth haircut
+        # Transaction costs
+        if self.cost_model == "trade_0" or self.trans_cost <= 0:
+            cost = 0.0
+        elif self.cost_model == "trade_l1":
+            cost = self.trans_cost * turnover
+        else:  # cost_model == "trade_l2":
+            cost = self.trans_cost * (turnover ** 2)
+        cost_mult = max(0.0, 1.0 - cost)  # how cost contributes to wealth
 
-        # wealth update
+        # Wealth update
         gross = 1.0 + port_ret
         if gross <= 0:
             gross = 1e-12
         v_prev = self.value
         v_next = v_prev * gross * cost_mult
-
-        # drawdown update
         self.value = float(v_next)
+
+        # Drawdown update
         if self.value > self.peak:
             self.peak = self.value
         self.dd = float(self.value / self.peak - 1.0)
 
-        # reward
+        # REWARD SECTION
         log_growth = float(np.log(max(self.value / v_prev, 1e-12)))
 
+        # All we might need to calculate reward
         ctx = {
             "t": self.t,
             "date": self.dates[self.t + 1] if (self.t + 1) < len(self.dates) else self.dates[self.t],
@@ -167,7 +173,7 @@ class PortfolioEnv(gym.Env):
             "peak": self.peak,
             "drawdown": self.dd,
             "log_growth": log_growth,
-            "history": self.history,  # reward_fn can use recent curve if it wants
+            "history": self.history,
         }
 
         if self.reward_fn is None:
@@ -191,7 +197,7 @@ class PortfolioEnv(gym.Env):
         terminated = (self.t >= self.end)
         truncated = False
 
-        obs = self._get_obs() if not terminated else self._get_obs()  # keep simple
+        obs = self._get_obs() if not terminated else self._get_obs()
         info = {
             "t": self.t,
             "date": self.dates[self.t] if self.t < len(self.dates) else self.dates[-1],
