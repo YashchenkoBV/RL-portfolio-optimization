@@ -62,7 +62,7 @@ def rollout(model, env, deterministic=True):
     return env.unwrapped.get_history_df()
 
 
-def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost_model: str):
+def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost_model: str, rf_rate: float = 0.0):
     # match env time convention: decide at t, apply P[t+1]/P[t]-1
     if "Date" in df.columns:
         dates = df["Date"].to_numpy()
@@ -78,8 +78,11 @@ def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost
     w_target = np.ones(N, dtype=np.float64) / N
     w_prev = w_target.copy()
 
+    cash_value = 1.0
+    rf_daily = rf_rate / 252
+
     value = 1.0
-    hist = {"date": [], "value": [], "port_ret": [], "turnover": [], "cost": [], "dd": []}
+    hist = {"date": [], "value": [], "excess_value": [], "port_ret": [], "turnover": [], "cost": [], "dd": []}
     peak = 1.0
 
     for t in range(start, end):
@@ -99,8 +102,12 @@ def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost
             peak = value
         dd = float(value / peak - 1.0)
 
+        cash_value *= (1 + rf_daily)
+        excess_value = value / cash_value
+
         hist["date"].append(dates[t + 1] if (t + 1) < len(dates) else dates[t])
         hist["value"].append(value)
+        hist["excess_value"].append(excess_value)
         hist["port_ret"].append(port_ret)
         hist["turnover"].append(turnover)
         hist["cost"].append(cost)
@@ -152,11 +159,13 @@ def main():
         window=env_cfg["window"],
         trans_cost=env_cfg["trans_cost"],
         cost_model=env_cfg["cost_model"],
+        rf_rate=env_cfg.get("rf_rate", 0.0)
     )
     b_hist.to_csv(os.path.join(args.out_dir, "baseline_equal_weight_history.csv"), index=False)
 
     b_equity = pd.Series(b_hist["value"].to_numpy(), name="equal_weight")
-    b_metrics = metric_table(b_equity.to_frame())
+    b_excess = pd.Series(b_hist["excess_value"].to_numpy(), name="equal_weight") if "excess_value" in b_hist.columns else None
+    b_metrics = metric_table(b_equity.to_frame(), excess_prices=b_excess)
     b_costs = turnover_cost_table(b_hist)
 
     rl_metrics.to_csv(os.path.join(args.out_dir, "eval_metrics.csv"))
