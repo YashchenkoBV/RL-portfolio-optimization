@@ -32,6 +32,7 @@ class PortfolioEnv(gym.Env):
         random_start=False,     # if True, sample start each reset
         seed=None,
         initial_value=1.0,
+        rf_rate=0.0,
     ):
         super().__init__()
 
@@ -67,6 +68,7 @@ class PortfolioEnv(gym.Env):
         self.episode_length = episode_length
         self.random_start = bool(random_start)
         self.initial_value = float(initial_value)
+        self.rf_daily = float(rf_rate) / 252
 
         self.base_start = self.window if start_idx is None else int(start_idx)
         self.base_end = (self.T - 1) if end_idx is None else int(end_idx)
@@ -79,12 +81,12 @@ class PortfolioEnv(gym.Env):
 
         # Feature and observation spaces
         feat_dim = self._feature_dim()
-        obs_dim = feat_dim + self.N + 1  # features + prev weights + drawdown
+        obs_dim = feat_dim + (self.N + 1) + 1  # features + prev weights (incl. cash) + drawdown
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
         self.action_space = spaces.Box(
-            low=-5.0, high=5.0, shape=(self.N,), dtype=np.float32
+            low=-5.0, high=5.0, shape=(self.N + 1,), dtype=np.float32
         )
 
         # state
@@ -107,7 +109,8 @@ class PortfolioEnv(gym.Env):
         self.value = self.initial_value
         self.peak = self.initial_value
         self.dd = 0.0
-        self.w_prev = np.ones(self.N, dtype=np.float64) / self.N
+        w0 = np.ones(self.N, dtype=np.float64) / self.N
+        self.w_prev = np.concatenate([w0, [0.0]])  # start fully invested in equity
 
         self.history = {
             "date": [],
@@ -127,11 +130,13 @@ class PortfolioEnv(gym.Env):
         if self.t >= self.end:
             raise RuntimeError("Episode is over. Call reset().")
 
-        w = self._softmax(action).astype(np.float64)
+        w_full = self._softmax(action).astype(np.float64)  # N+1
+        w_assets = w_full[:-1]
+        w_cash = w_full[-1]
         r = self.simple_ret[self.t]  # returns for interval t -> t+1
 
-        port_ret = float(np.dot(w, r))
-        turnover = float(np.sum(np.abs(w - self.w_prev)))
+        port_ret = float(np.dot(w_assets, r)) + float(w_cash * self.rf_daily)
+        turnover = float(np.sum(np.abs(w_full - self.w_prev)))
 
         # Transaction costs
         if self.cost_model == "trade_0" or self.trans_cost <= 0:
@@ -165,7 +170,7 @@ class PortfolioEnv(gym.Env):
         ctx = {
             "t": self.t,
             "date": self.dates[self.t + 1] if (self.t + 1) < len(self.dates) else self.dates[self.t],
-            "weights": w,
+            "weights": w_full,
             "weights_prev": self.w_prev,
             "asset_returns": r,
             "portfolio_return": port_ret,
@@ -195,9 +200,9 @@ class PortfolioEnv(gym.Env):
         self.history["dd"].append(self.dd)
 
         # advance time
-        w_after = w * (1 + r)
+        w_after = np.concatenate([w_assets * (1.0 + r), [w_cash * (1.0 + self.rf_daily)]])
         w_sum = w_after.sum()
-        self.w_prev = w_after / w_sum if w_sum > 0 else w
+        self.w_prev = w_after / w_sum if w_sum > 1e-12 else self.w_prev
         self.t += 1
 
         terminated = (self.t >= self.end)

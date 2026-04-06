@@ -47,6 +47,7 @@ def build_env(df: pd.DataFrame, env_cfg, reward_fn, seed=0):
         reward_fn=reward_fn,
         seed=seed,
         initial_value=1.0,
+        rf_rate=env_cfg.get("rf_rate", 0.0)
     )
     return Monitor(env)
 

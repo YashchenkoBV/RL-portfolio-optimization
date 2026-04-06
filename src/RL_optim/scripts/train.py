@@ -48,6 +48,7 @@ def build_env(df: pd.DataFrame, args, reward_fn, random_start: bool):
         reward_fn=reward_fn,
         seed=args.seed,
         initial_value=1.0,
+        rf_rate=args.rf_rate,
     )
     return Monitor(env)
 
@@ -75,6 +76,7 @@ def main():
     p.add_argument("--cost_model", type=str, default="trade_l1", choices=["trade_0", "trade_l1", "trade_l2"])
     p.add_argument("--episode_length", type=int, default=None)
     p.add_argument("--random_start", action="store_true")
+    p.add_argument("--rf_rate", type=float, default=0.0)
 
     # reward selection + params (used depending on reward)
     p.add_argument("--reward_name", type=str, default="baseline")
@@ -131,6 +133,7 @@ def main():
             "cost_model": args.cost_model,
             "episode_length": args.episode_length,
             "random_start": args.random_start,
+            "rf_rate": args.rf_rate,
         },
         "reward": {
             "name": args.reward_name,
