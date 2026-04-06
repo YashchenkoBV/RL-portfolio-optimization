@@ -74,8 +74,8 @@ def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost
     start = window
     end = T - 1  # inclusive price index (last step uses P[end]/P[end-1])
 
-    w = np.ones(N, dtype=np.float64) / N
-    w_prev = w.copy()
+    w_target = np.ones(N, dtype=np.float64) / N
+    w_prev = w_target.copy()
 
     value = 1.0
     hist = {"date": [], "value": [], "port_ret": [], "turnover": [], "cost": [], "dd": []}
@@ -83,9 +83,9 @@ def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost
 
     for t in range(start, end):
         r = P[t + 1] / P[t] - 1.0
-        port_ret = float(np.dot(w, r))
+        port_ret = float(np.dot(w_target, r))
 
-        turnover = float(np.sum(np.abs(w - w_prev)))
+        turnover = float(np.sum(np.abs(w_target - w_prev)))
         if cost_model == "trade_0" or trans_cost <= 0:
             cost = 0.0
         elif cost_model == "trade_l2":
@@ -105,7 +105,9 @@ def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost
         hist["cost"].append(cost)
         hist["dd"].append(dd)
 
-        w_prev = w
+        w_after = w_target * (1.0 + r)
+        w_sum = w_after.sum()
+        w_prev = w_after / w_sum if w_sum > 1e-12 else w_prev
 
     return pd.DataFrame(hist)
 
