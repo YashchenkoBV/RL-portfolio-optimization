@@ -109,12 +109,14 @@ class PortfolioEnv(gym.Env):
         self.value = self.initial_value
         self.peak = self.initial_value
         self.dd = 0.0
+        self.cash_value = self.initial_value
         w0 = np.ones(self.N, dtype=np.float64) / self.N
         self.w_prev = np.concatenate([w0, [0.0]])  # start fully invested in equity
 
         self.history = {
             "date": [],
             "value": [],
+            "excess_value": [],
             "port_ret": [],
             "reward": [],
             "turnover": [],
@@ -160,6 +162,10 @@ class PortfolioEnv(gym.Env):
             self.peak = self.value
         self.dd = float(self.value / self.peak - 1.0)
 
+        # Cash counterfactual and excess value
+        self.cash_value *= (1.0 + self.rf_daily)
+        excess_value = self.value / self.cash_value
+
         # REWARD SECTION
         log_growth = float(np.log(max(self.value / v_prev, 1e-12)))
 
@@ -180,6 +186,7 @@ class PortfolioEnv(gym.Env):
             "value": self.value,
             "peak": self.peak,
             "drawdown": self.dd,
+            "excess_value": excess_value,
             "log_growth": log_growth,
             "history": self.history,
             "is_terminal": terminated,
@@ -193,6 +200,7 @@ class PortfolioEnv(gym.Env):
         # book-keeping (realized at next day)
         self.history["date"].append(ctx["date"])
         self.history["value"].append(self.value)
+        self.history["excess_value"].append(excess_value)
         self.history["port_ret"].append(port_ret)
         self.history["reward"].append(reward)
         self.history["turnover"].append(turnover)

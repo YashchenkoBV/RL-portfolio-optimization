@@ -15,10 +15,10 @@ __all__ = [
 
 def _get_values(ctx, include_current=True, window=None):
     h = (ctx.get("history") or {})
-    vals = list(h.get("value", []))
+    vals = list(h.get("excess_value", []))
 
     if include_current:
-        vals.append(float(ctx["value"]))
+        vals.append(float(ctx["excess_value"]))
     if window is not None and len(vals) > window:
         vals = vals[-int(window):]
 

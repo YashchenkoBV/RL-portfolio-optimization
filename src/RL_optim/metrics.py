@@ -159,7 +159,7 @@ def compute_cii(prices: pd.DataFrame) -> pd.Series:
 
 # ---------- tables used in eval (new, small) ----------
 
-def metric_table(prices, periods_per_year: int = 252, log: bool = True) -> pd.DataFrame:
+def metric_table(prices, periods_per_year: int = 252, log: bool = True, excess_prices=None) -> pd.DataFrame:
     P = to_prices_df(prices)
     out = pd.DataFrame(index=P.columns)
     out["total_return"] = compute_total_return(P)
@@ -170,8 +170,9 @@ def metric_table(prices, periods_per_year: int = 252, log: bool = True) -> pd.Da
     out["mdd_pct"] = compute_mdd(P)
     out["calmar"] = compute_calmar(P, periods_per_year=periods_per_year)
     out["ulcer"] = compute_ulcer_index(P)
-    out["csi"] = compute_csi(P)
-    out["cii"] = compute_cii(P)
+    csi_input = to_prices_df(excess_prices, name=P.columns[0]) if excess_prices is not None else P
+    out["csi"] = compute_csi(csi_input)
+    out["cii"] = compute_cii(csi_input)
     return out
 
 

@@ -142,7 +142,8 @@ def main():
     hist.to_csv(os.path.join(args.out_dir, "eval_history.csv"), index=False)
 
     rl_equity = pd.Series(hist["value"].to_numpy(), name="rl_portfolio")
-    rl_metrics = metric_table(rl_equity.to_frame())
+    rl_excess = pd.Series(hist["excess_value"].to_numpy(), name="rl_portfolio") if "excess_value" in hist.columns else None
+    rl_metrics = metric_table(rl_equity.to_frame(), excess_prices=rl_excess)
     rl_costs = turnover_cost_table(hist)
 
     # baseline: equal-weight (same cost model)
