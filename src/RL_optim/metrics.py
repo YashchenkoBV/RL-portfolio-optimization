@@ -18,6 +18,11 @@ __all__ = [
     "compute_calmar",
     "compute_csi",
     "compute_cii",
+    # window metrics (Phase 0 cluster representatives)
+    "compute_window_ulcer",
+    "compute_window_avg_dd_duration",
+    "compute_window_mdd_demeaned",
+    "compute_window_es",
 ]
 
 # ---------- helpers (copied) ----------
@@ -132,6 +137,17 @@ def compute_calmar(prices: pd.DataFrame, periods_per_year: int = 252) -> pd.Seri
 
 
 def compute_csi(prices: pd.DataFrame) -> pd.Series:
+    """
+    CSI computed with denominator n*(n-1)/2 where n is the number of input values.
+
+    With s_i = sum_{j=0..i-1} a_ij and a_i0 = 0 by definition (no y_0),
+    the maximum achievable sum across all i is 0+1+2+...+(n-1) = n(n-1)/2.
+
+    Note: prior CSI specification documents (Iashchenko docx, DD_evaluation.pdf)
+    state n(n+1)/2, which is incorrect — that denominator yields CSI < 100% for
+    perfectly ascending series. The convention used here is the mathematically
+    consistent one: a perfectly ascending series of length n returns CSI = 100%.
+    """
     # copied from calculate_metrics.py (same logic; naive O(n^2))
     prices = to_prices_df(prices)
     out = {}
@@ -155,6 +171,103 @@ def compute_cii(prices: pd.DataFrame) -> pd.Series:
     # copied from calculate_metrics.py
     csi = compute_csi(prices)
     return 100.0 - csi
+
+
+# ---------- window metrics (cluster representatives, Phase 0) ----------
+
+def compute_window_ulcer(series) -> float:
+    """Cluster 2 representative — drawdown magnitude (RMS form).
+
+    Ulcer Index over window: sqrt(mean(dd^2)) computed on the running-max
+    drawdowns of the series. Returned as fraction (>= 0).
+
+    Used in the Martin ratio (return / Ulcer). Chosen over MDD because the
+    per-step Δ of MDD is sparse — it changes only when a new low forms.
+    Ulcer averages over the window and provides a dense, smooth signal.
+    """
+    s = np.asarray(series, dtype=np.float64).reshape(-1)
+    if s.size < 2:
+        return 0.0
+    peak = np.maximum.accumulate(s)
+    dd = s / peak - 1.0  # <= 0
+    return float(np.sqrt(np.mean(dd ** 2)))
+
+
+def compute_window_avg_dd_duration(series) -> float:
+    """Cluster 1 representative — drawdown duration.
+
+    Mean length of drawdown episodes within the window, in steps.
+    A drawdown episode is a maximal contiguous run of steps where
+    series < running_max. Returns 0.0 if no drawdown episodes occur.
+    """
+    s = np.asarray(series, dtype=np.float64).reshape(-1)
+    if s.size < 2:
+        return 0.0
+    peak = np.maximum.accumulate(s)
+    underwater = s < peak
+    durations = []
+    run = 0
+    for u in underwater:
+        if u:
+            run += 1
+        else:
+            if run > 0:
+                durations.append(run)
+            run = 0
+    if run > 0:
+        durations.append(run)
+    if not durations:
+        return 0.0
+    return float(np.mean(durations))
+
+
+def compute_window_mdd_demeaned(series) -> float:
+    """Cluster 4 representative — demeaned drawdown.
+
+    MDD computed on the price path reconstructed from demeaned log returns.
+    This isolates within-trend volatility from drift: a series with strong
+    upward drift can have MDD = 0 (no breach of running max) while still
+    exhibiting significant short-term reversals; demeaning surfaces those.
+
+    Procedure:
+      1. log_returns = log(s[1:] / s[:-1])
+      2. demeaned = log_returns - mean(log_returns)
+      3. reconstructed = cumprod(exp(demeaned)) prefixed with 1.0
+      4. return MDD on the reconstructed path
+    """
+    s = np.asarray(series, dtype=np.float64).reshape(-1)
+    if s.size < 3:
+        return 0.0
+    log_ret = np.log(s[1:] / s[:-1])
+    demeaned = log_ret - np.mean(log_ret)
+    reconstructed = np.concatenate([[1.0], np.cumprod(np.exp(demeaned))])
+    peak = np.maximum.accumulate(reconstructed)
+    dd = reconstructed / peak - 1.0
+    return float(-dd.min())
+
+
+def compute_window_es(series, alpha: float = 0.05) -> float:
+    """Cluster 0 representative — tail risk (Expected Shortfall / CVaR).
+
+    Expected Shortfall at confidence (1 - alpha): mean of the worst alpha-fraction
+    of log returns within the window. Returned as a positive number representing
+    loss magnitude (so a more-negative tail produces a larger ES value).
+
+    Convention: at alpha=0.05 with W=60 log-returns (so 59 returns), the worst
+    ceil(0.05 * 59) = 3 returns are averaged. Minimum 1 sample taken.
+
+    Chosen over Std because Std loses tail-shape information, and over VaR
+    because VaR is non-convex and not subadditive (i.e. it can discourage
+    diversification, which is exactly the wrong incentive for portfolio RL).
+    """
+    s = np.asarray(series, dtype=np.float64).reshape(-1)
+    if s.size < 2:
+        return 0.0
+    log_ret = np.log(s[1:] / s[:-1])
+    n = log_ret.size
+    k = max(1, int(np.ceil(alpha * n)))
+    worst = np.sort(log_ret)[:k]  # most-negative returns
+    return float(-np.mean(worst))
 
 
 # ---------- tables used in eval (new, small) ----------

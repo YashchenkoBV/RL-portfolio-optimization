@@ -47,6 +47,20 @@ def _cii_from_ctx(ctx, window=None, include_current=True):
     return 100.0 - _csi_from_ctx(ctx, window=window, include_current=include_current)
 
 
+def _delta_metric_from_ctx(ctx, metric_fn, window=60):
+    """Compute metric_fn on [history+current] window minus metric_fn on history-only window.
+
+    Returns None if raw history length < window (warmup signal — caller falls back).
+    metric_fn signature: (1d array-like) -> float.
+    """
+    hist_len = len((ctx.get("history") or {}).get("excess_value", []))
+    if hist_len < window:
+        return None
+    vals_with    = _get_values(ctx, include_current=True,  window=window)
+    vals_without = _get_values(ctx, include_current=False, window=window)
+    return float(metric_fn(vals_with)) - float(metric_fn(vals_without))
+
+
 # ---------- rewards (ctx -> float) ----------
 
 def reward_log_growth_turnover(ctx, eta=0.0):
@@ -61,9 +75,11 @@ def reward_log_growth_minus_cii(ctx, W=60, lam=1.0, eta=0.0):
 
 def reward_log_growth_plus_delta_csi(ctx, W=60, alpha=1.0, eta=0.0):
     # log_growth + alpha * (CSI_t - CSI_{t-1})/100 - eta * turnover
-    # During warmup (fewer than W values), delta is undefined — fall back to log_growth only
-    vals = _get_values(ctx, include_current=True, window=W)
-    if vals.shape[0] < W:
+    # Gate on raw history length: when hist_len == W-1, include_current=True yields W values
+    # but include_current=False yields W-1 — denominators differ and delta is mis-scaled at that
+    # boundary. Requiring hist_len >= W ensures both windows are exactly length W.
+    hist_len = len((ctx.get("history") or {}).get("excess_value", []))
+    if hist_len < W:
         return float(ctx["log_growth"]) - float(eta) * float(ctx["turnover"])
     csi_t = _csi_from_ctx(ctx, window=W, include_current=True)
     csi_prev = _csi_from_ctx(ctx, window=W, include_current=False)
