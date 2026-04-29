@@ -33,6 +33,7 @@ class PortfolioEnv(gym.Env):
         seed=None,
         initial_value=1.0,
         rf_rate=0.0,
+        dsr_eta=1.0/252,
     ):
         super().__init__()
 
@@ -69,6 +70,7 @@ class PortfolioEnv(gym.Env):
         self.random_start = bool(random_start)
         self.initial_value = float(initial_value)
         self.rf_daily = float(rf_rate) / 252
+        self.dsr_eta = float(dsr_eta)
 
         self.base_start = self.window if start_idx is None else int(start_idx)
         self.base_end = (self.T - 1) if end_idx is None else int(end_idx)
@@ -112,6 +114,10 @@ class PortfolioEnv(gym.Env):
         self.cash_value = self.initial_value
         w0 = np.ones(self.N, dtype=np.float64) / self.N
         self.w_prev = np.concatenate([w0, [0.0]])  # start fully invested in equity
+
+        # DSR state — EMAs of return and squared return; updated AFTER reward each step
+        self.dsr_A = 0.0
+        self.dsr_B = 0.0
 
         self.history = {
             "date": [],
@@ -173,6 +179,7 @@ class PortfolioEnv(gym.Env):
         terminated = (self.t + 1 >= self.end)
 
         # All we might need to calculate reward
+        # DSR state is the pre-update (t-1) state; EMAs advance AFTER reward is paid
         ctx = {
             "t": self.t,
             "date": self.dates[self.t + 1] if (self.t + 1) < len(self.dates) else self.dates[self.t],
@@ -190,12 +197,20 @@ class PortfolioEnv(gym.Env):
             "log_growth": log_growth,
             "history": self.history,
             "is_terminal": terminated,
+            "dsr_A": self.dsr_A,
+            "dsr_B": self.dsr_B,
+            "dsr_eta": self.dsr_eta,
         }
 
         if self.reward_fn is None:
             reward = log_growth - self.turnover_penalty * turnover
         else:
             reward = float(self.reward_fn(ctx))
+
+        # Advance DSR EMAs using the realized port_ret (state for the next step)
+        eta_dsr = self.dsr_eta
+        self.dsr_A = (1.0 - eta_dsr) * self.dsr_A + eta_dsr * port_ret
+        self.dsr_B = (1.0 - eta_dsr) * self.dsr_B + eta_dsr * (port_ret * port_ret)
 
         # book-keeping (realized at next day)
         self.history["date"].append(ctx["date"])
