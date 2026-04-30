@@ -15,13 +15,20 @@ if ROOT not in sys.path:
 from portfolio_env import PortfolioEnv
 from rewards import make_reward
 from metrics import metric_table, turnover_cost_table
+from indicators import default_feature_fn
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 
 
-def load_prices(csv_path: str) -> pd.DataFrame:
-    return pd.read_csv(csv_path)
+def load_ohlcv(prefix: str) -> dict:
+    """prefix is e.g. 'data/price_train' — loads four CSVs."""
+    return {
+        "close":  pd.read_csv(f"{prefix}_close.csv"),
+        "high":   pd.read_csv(f"{prefix}_high.csv"),
+        "low":    pd.read_csv(f"{prefix}_low.csv"),
+        "volume": pd.read_csv(f"{prefix}_volume.csv"),
+    }
 
 
 def build_reward(args):
@@ -37,15 +44,16 @@ def build_reward(args):
     return make_reward(args.reward_name, **reward_kwargs), reward_kwargs
 
 
-def build_env(df: pd.DataFrame, args, reward_fn, random_start: bool):
+def build_env(ohlcv: dict, args, reward_fn, random_start: bool):
     env = PortfolioEnv(
-        prices=df,
+        prices=ohlcv,
         window=args.window,
         trans_cost=args.trans_cost,
         cost_model=args.cost_model,
         episode_length=args.episode_length,
         random_start=random_start,
         reward_fn=reward_fn,
+        feature_fn=default_feature_fn,
         seed=args.seed,
         initial_value=1.0,
         rf_rate=args.rf_rate,
@@ -67,8 +75,8 @@ def main():
     p = argparse.ArgumentParser()
 
     # data
-    p.add_argument("--train_csv", default="data/price_train_data.csv")
-    p.add_argument("--val_csv", default="data/price_val_data.csv")
+    p.add_argument("--train_prefix", default="data/price_train")
+    p.add_argument("--val_prefix", default="data/price_val")
 
     # env
     p.add_argument("--window", type=int, default=50)
@@ -104,15 +112,15 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     # load data
-    train_df = load_prices(args.train_csv)
-    val_df = load_prices(args.val_csv)
+    train_ohlcv = load_ohlcv(args.train_prefix)
+    val_ohlcv = load_ohlcv(args.val_prefix)
 
     # reward
     reward_fn, reward_kwargs = build_reward(args)
 
     # envs
-    train_env = build_env(train_df, args, reward_fn, random_start=args.random_start)
-    val_env = build_env(val_df, args, reward_fn, random_start=False)
+    train_env = build_env(train_ohlcv, args, reward_fn, random_start=args.random_start)
+    val_env = build_env(val_ohlcv, args, reward_fn, random_start=False)
 
     # model
     model = PPO("MlpPolicy", train_env, seed=args.seed, verbose=1)
@@ -125,8 +133,8 @@ def main():
     model.save(model_path)
 
     cfg = {
-        "train_csv": args.train_csv,
-        "val_csv": args.val_csv,
+        "train_prefix": args.train_prefix,
+        "val_prefix": args.val_prefix,
         "env": {
             "window": args.window,
             "trans_cost": args.trans_cost,

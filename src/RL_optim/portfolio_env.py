@@ -19,13 +19,13 @@ class PortfolioEnv(gym.Env):
 
     def __init__(
         self,
-        prices,                 # pd.DataFrame or path to csv
+        prices,                 # OHLCV dict, pd.DataFrame, or path to csv
         window=50,              # feature lookback (in days of returns)
         trans_cost=0.0,         # wealth impact coefficient
         cost_model="trade_l1",  # "trade_0" | "trade_l1" | "trade_l2"
         turnover_penalty=0.0,   # default reward only (if reward_fn=None)
         reward_fn=None,         # callable(ctx) -> float
-        feature_fn=None,        # callable(returns_window)->1d features (optional)
+        feature_fn=None,        # callable(close_win, high_win, low_win, vol_win)->1d features
         start_idx=None,         # price index to start at (>= window)
         end_idx=None,           # price index to end at (<= len(prices)-1)
         episode_length=None,    # if set, end = start + episode_length
@@ -37,22 +37,61 @@ class PortfolioEnv(gym.Env):
     ):
         super().__init__()
 
-        # Load prices
-        if isinstance(prices, str):
-            df = pd.read_csv(prices)
-        else:
-            df = prices.copy()
+        # Two input modes:
+        #   OHLCV mode  : prices is a dict {"close", "high", "low", "volume"} of DataFrames.
+        #                 feature_fn must be provided and gets per-step (W, N) windows of each.
+        #   legacy mode : prices is a single DataFrame or CSV path with close-only data.
+        #                 feature_fn must be None — using indicator features requires OHLCV.
+        if isinstance(prices, dict):
+            self._is_ohlcv = True
+            close_df = prices["close"].copy()
+            high_df  = prices["high"].copy()
+            low_df   = prices["low"].copy()
+            vol_df   = prices["volume"].copy()
 
-        # Handle dates
-        if "Date" in df.columns:
-            self.dates = df["Date"].to_numpy()
-            df = df.drop(columns=["Date"])
-        else:
-            self.dates = np.arange(len(df))
+            if "Date" in close_df.columns:
+                self.dates = close_df["Date"].to_numpy()
+                close_df = close_df.drop(columns=["Date"])
+                high_df  = high_df.drop(columns=["Date"], errors="ignore")
+                low_df   = low_df.drop(columns=["Date"], errors="ignore")
+                vol_df   = vol_df.drop(columns=["Date"], errors="ignore")
+            else:
+                self.dates = np.arange(len(close_df))
 
-        self.assets = list(df.columns)
-        P = df.to_numpy(dtype=np.float64)  # (T, N)
-        self.P = P
+            self.assets = list(close_df.columns)
+            self.P = close_df.to_numpy(dtype=np.float64)
+            self.H = high_df.to_numpy(dtype=np.float64)
+            self.L = low_df.to_numpy(dtype=np.float64)
+            self.V = vol_df.to_numpy(dtype=np.float64)
+            assert self.P.shape == self.H.shape == self.L.shape == self.V.shape, \
+                "OHLCV DataFrames must have identical shape"
+        else:
+            self._is_ohlcv = False
+            if isinstance(prices, str):
+                df = pd.read_csv(prices)
+            else:
+                df = prices.copy()
+
+            if "Date" in df.columns:
+                self.dates = df["Date"].to_numpy()
+                df = df.drop(columns=["Date"])
+            else:
+                self.dates = np.arange(len(df))
+
+            self.assets = list(df.columns)
+            self.P = df.to_numpy(dtype=np.float64)
+            self.H = None
+            self.L = None
+            self.V = None
+
+            if feature_fn is not None:
+                raise ValueError(
+                    "feature_fn requires OHLCV input. Pass prices as a dict "
+                    "{'close', 'high', 'low', 'volume'} of DataFrames, or set "
+                    "feature_fn=None for legacy close-only mode."
+                )
+
+        P = self.P
         self.T, self.N = P.shape
 
         # Precomputed simple and log returns, length T-1
@@ -83,7 +122,8 @@ class PortfolioEnv(gym.Env):
 
         # Feature and observation spaces
         feat_dim = self._feature_dim()
-        obs_dim = feat_dim + (self.N + 1) + 1  # features + prev weights (incl. cash) + drawdown
+        # features + prev weights (incl. cash) + drawdown + value_ratio
+        obs_dim = feat_dim + (self.N + 1) + 1 + 1
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -263,9 +303,14 @@ class PortfolioEnv(gym.Env):
     def _feature_dim(self):
         if self.feature_fn is None:
             return self.window * self.N
-        # probe once with dummy input
-        dummy = np.zeros((self.window, self.N), dtype=np.float64)
-        out = np.asarray(self.feature_fn(dummy)).reshape(-1)
+        W, N = self.window, self.N
+        # Synthetic OHLCV that won't hit divide-by-zero or all-equal degeneracies
+        base = np.linspace(1.0, 2.0, W).reshape(W, 1) * np.ones((W, N))
+        dummy_c = base
+        dummy_h = base * 1.01
+        dummy_l = base * 0.99
+        dummy_v = np.ones((W, N)) * 1e6
+        out = np.asarray(self.feature_fn(dummy_c, dummy_h, dummy_l, dummy_v)).reshape(-1)
         return int(out.shape[0])
 
     @staticmethod
@@ -288,14 +333,19 @@ class PortfolioEnv(gym.Env):
         t = int(self.t)
         a = t - self.window
         b = t
-        rwin = self.log_ret[a:b]  # (window, N)
 
         if self.feature_fn is None:
+            rwin = self.log_ret[a:b]  # (window, N)
             feats = rwin.reshape(-1)
         else:
-            feats = np.asarray(self.feature_fn(rwin)).reshape(-1)
+            c_win = self.P[a:b]
+            h_win = self.H[a:b]
+            l_win = self.L[a:b]
+            v_win = self.V[a:b]
+            feats = np.asarray(self.feature_fn(c_win, h_win, l_win, v_win)).reshape(-1)
 
-        obs = np.concatenate([feats, self.w_prev, np.array([self.dd])], axis=0)
+        value_ratio = self.value / self.initial_value
+        obs = np.concatenate([feats, self.w_prev, np.array([self.dd, value_ratio])], axis=0)
         return obs.astype(np.float32)
 
     # convenient for eval scripts

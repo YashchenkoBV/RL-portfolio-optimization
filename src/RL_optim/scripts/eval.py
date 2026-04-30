@@ -14,13 +14,20 @@ if ROOT not in sys.path:
 from portfolio_env import PortfolioEnv
 from rewards import make_reward
 from metrics import metric_table, turnover_cost_table
+from indicators import default_feature_fn
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 
 
-def load_prices(csv_path: str) -> pd.DataFrame:
-    return pd.read_csv(csv_path)
+def load_ohlcv(prefix: str) -> dict:
+    """prefix is e.g. 'data/price_test' — loads four CSVs."""
+    return {
+        "close":  pd.read_csv(f"{prefix}_close.csv"),
+        "high":   pd.read_csv(f"{prefix}_high.csv"),
+        "low":    pd.read_csv(f"{prefix}_low.csv"),
+        "volume": pd.read_csv(f"{prefix}_volume.csv"),
+    }
 
 
 def load_config(model_path: str):
@@ -36,15 +43,16 @@ def build_reward_from_cfg(cfg_reward):
     return make_reward(cfg_reward["name"], **cfg_reward.get("kwargs", {}))
 
 
-def build_env(df: pd.DataFrame, env_cfg, reward_fn, seed=0):
+def build_env(ohlcv: dict, env_cfg, reward_fn, seed=0):
     env = PortfolioEnv(
-        prices=df,
+        prices=ohlcv,
         window=env_cfg["window"],
         trans_cost=env_cfg["trans_cost"],
         cost_model=env_cfg["cost_model"],
         episode_length=None,
         random_start=False,
         reward_fn=reward_fn,
+        feature_fn=default_feature_fn,
         seed=seed,
         initial_value=1.0,
         rf_rate=env_cfg.get("rf_rate", 0.0)
@@ -123,7 +131,7 @@ def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model_path", required=True)
-    p.add_argument("--test_csv", default="data/price_test_data.csv")
+    p.add_argument("--test_prefix", default="data/price_test")
     p.add_argument("--out_dir", default=None)
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
@@ -136,12 +144,12 @@ def main():
         args.out_dir = os.path.join(os.path.dirname(args.model_path), "eval")
     os.makedirs(args.out_dir, exist_ok=True)
 
-    test_df = load_prices(args.test_csv)
+    test_ohlcv = load_ohlcv(args.test_prefix)
 
     reward_fn = build_reward_from_cfg(cfg["reward"])
     env_cfg = cfg["env"]
 
-    env = build_env(test_df, env_cfg, reward_fn, seed=args.seed)
+    env = build_env(test_ohlcv, env_cfg, reward_fn, seed=args.seed)
 
     model = PPO.load(args.model_path, env=env)
 
@@ -153,9 +161,9 @@ def main():
     rl_metrics = metric_table(rl_equity.to_frame(), excess_prices=rl_excess)
     rl_costs = turnover_cost_table(hist)
 
-    # baseline: equal-weight (same cost model)
+    # baseline: equal-weight uses close only
     b_hist = equal_weight_baseline(
-        test_df,
+        test_ohlcv["close"],
         window=env_cfg["window"],
         trans_cost=env_cfg["trans_cost"],
         cost_model=env_cfg["cost_model"],

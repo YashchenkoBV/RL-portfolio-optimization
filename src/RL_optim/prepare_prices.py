@@ -29,15 +29,31 @@ def build_price_splits(in_csv="data/company_prices.csv"):
             out.append(t)
     tickers = out
 
+    # OHLCV download per split. auto_adjust=True splits/divs-adjusts price fields;
+    # volume is left raw (volume_ratio_20 normalizes by 20-day mean anyway).
+    fields = {"close": "Close", "high": "High", "low": "Low", "volume": "Volume"}
+
     for name, start, end in [("train", "2005-01-01", "2016-12-31"),
                              ("val", "2017-01-01", "2019-12-31"),
                              ("test", "2020-01-01", "2024-12-31")]:
         end_excl = (pd.to_datetime(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        close = yf.download(tickers, start=start, end=end_excl, auto_adjust=True, progress=False)["Close"]
-        if isinstance(close, pd.Series): close = close.to_frame(tickers[0])
-        out = close.reindex(columns=tickers).reset_index()
-        out["Date"] = pd.to_datetime(out["Date"]).dt.strftime("%Y-%m-%d")
-        out.to_csv(f"price_{name}_data.csv", index=False)
+        data = yf.download(tickers, start=start, end=end_excl, auto_adjust=True, progress=False)
+
+        for label, key in fields.items():
+            df = data[key]
+            if isinstance(df, pd.Series):
+                df = df.to_frame(tickers[0])
+            df = df.reindex(columns=tickers).reset_index()
+            df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
+            df.to_csv(f"price_{name}_{label}.csv", index=False)
+
+        # Legacy close-only file kept as a fallback for the close-only smoke path.
+        legacy = data["Close"]
+        if isinstance(legacy, pd.Series):
+            legacy = legacy.to_frame(tickers[0])
+        legacy = legacy.reindex(columns=tickers).reset_index()
+        legacy["Date"] = pd.to_datetime(legacy["Date"]).dt.strftime("%Y-%m-%d")
+        legacy.to_csv(f"price_{name}_data.csv", index=False)
 
 if __name__ == "__main__":
     build_price_splits()
