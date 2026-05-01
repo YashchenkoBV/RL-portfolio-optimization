@@ -15,7 +15,7 @@ if ROOT not in sys.path:
 from portfolio_env import PortfolioEnv
 from rewards import make_reward
 from metrics import metric_table, turnover_cost_table
-from indicators import default_feature_fn
+from indicators import FeatureNormalizer, make_feature_fn
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
@@ -44,7 +44,7 @@ def build_reward(args):
     return make_reward(args.reward_name, **reward_kwargs), reward_kwargs
 
 
-def build_env(ohlcv: dict, args, reward_fn, random_start: bool):
+def build_env(ohlcv: dict, args, reward_fn, feature_fn, random_start: bool):
     env = PortfolioEnv(
         prices=ohlcv,
         window=args.window,
@@ -53,7 +53,7 @@ def build_env(ohlcv: dict, args, reward_fn, random_start: bool):
         episode_length=args.episode_length,
         random_start=random_start,
         reward_fn=reward_fn,
-        feature_fn=default_feature_fn,
+        feature_fn=feature_fn,
         seed=args.seed,
         initial_value=1.0,
         rf_rate=args.rf_rate,
@@ -115,12 +115,28 @@ def main():
     train_ohlcv = load_ohlcv(args.train_prefix)
     val_ohlcv = load_ohlcv(args.val_prefix)
 
+    # fit feature normalizer on TRAIN ONLY; reuse same stats at val/test time.
+    # Sweep cost is ~10-30s once per run; saved alongside model for eval.
+    def _to_array(df):
+        return df.drop(columns=["Date"]).to_numpy(dtype=np.float64) if "Date" in df.columns \
+            else df.to_numpy(dtype=np.float64)
+
+    normalizer = FeatureNormalizer().fit_from_price_tensor(
+        P=_to_array(train_ohlcv["close"]),
+        H=_to_array(train_ohlcv["high"]),
+        L=_to_array(train_ohlcv["low"]),
+        V=_to_array(train_ohlcv["volume"]),
+        window=args.window,
+    )
+    normalizer.save(os.path.join(args.out_dir, "feature_normalizer.json"))
+    feature_fn = make_feature_fn(normalizer)
+
     # reward
     reward_fn, reward_kwargs = build_reward(args)
 
     # envs
-    train_env = build_env(train_ohlcv, args, reward_fn, random_start=args.random_start)
-    val_env = build_env(val_ohlcv, args, reward_fn, random_start=False)
+    train_env = build_env(train_ohlcv, args, reward_fn, feature_fn, random_start=args.random_start)
+    val_env = build_env(val_ohlcv, args, reward_fn, feature_fn, random_start=False)
 
     # model
     model = PPO("MlpPolicy", train_env, seed=args.seed, verbose=1)

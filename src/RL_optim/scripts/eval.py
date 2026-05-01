@@ -14,7 +14,7 @@ if ROOT not in sys.path:
 from portfolio_env import PortfolioEnv
 from rewards import make_reward
 from metrics import metric_table, turnover_cost_table
-from indicators import default_feature_fn
+from indicators import FeatureNormalizer, make_feature_fn
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
@@ -43,7 +43,7 @@ def build_reward_from_cfg(cfg_reward):
     return make_reward(cfg_reward["name"], **cfg_reward.get("kwargs", {}))
 
 
-def build_env(ohlcv: dict, env_cfg, reward_fn, seed=0):
+def build_env(ohlcv: dict, env_cfg, reward_fn, feature_fn, seed=0):
     env = PortfolioEnv(
         prices=ohlcv,
         window=env_cfg["window"],
@@ -52,7 +52,7 @@ def build_env(ohlcv: dict, env_cfg, reward_fn, seed=0):
         episode_length=None,
         random_start=False,
         reward_fn=reward_fn,
-        feature_fn=default_feature_fn,
+        feature_fn=feature_fn,
         seed=seed,
         initial_value=1.0,
         rf_rate=env_cfg.get("rf_rate", 0.0)
@@ -146,10 +146,21 @@ def main():
 
     test_ohlcv = load_ohlcv(args.test_prefix)
 
+    # load feature normalizer fit at train time. Must exist next to the model;
+    # raising here instead of silently fitting on test prevents look-ahead bias.
+    normalizer_path = os.path.join(os.path.dirname(args.model_path), "feature_normalizer.json")
+    if not os.path.exists(normalizer_path):
+        raise FileNotFoundError(
+            f"feature_normalizer.json not found at {normalizer_path}. "
+            "This file is produced by train.py and is required for eval."
+        )
+    normalizer = FeatureNormalizer.load(normalizer_path)
+    feature_fn = make_feature_fn(normalizer)
+
     reward_fn = build_reward_from_cfg(cfg["reward"])
     env_cfg = cfg["env"]
 
-    env = build_env(test_ohlcv, env_cfg, reward_fn, seed=args.seed)
+    env = build_env(test_ohlcv, env_cfg, reward_fn, feature_fn, seed=args.seed)
 
     model = PPO.load(args.model_path, env=env)
 
