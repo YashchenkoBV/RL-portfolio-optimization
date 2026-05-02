@@ -15,6 +15,7 @@ from portfolio_env import PortfolioEnv
 from rewards import make_reward
 from metrics import metric_table, turnover_cost_table
 from indicators import FeatureNormalizer, make_feature_fn
+from rollouts import threaded_rollout
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
@@ -30,8 +31,23 @@ def load_ohlcv(prefix: str) -> dict:
     }
 
 
-def load_config(model_path: str):
-    run_dir = os.path.dirname(model_path)
+def _resolve_run_dir_and_model(model_path, prefer_best=True):
+    """Accept either a path to a .zip model or a run directory.
+    Returns (run_dir, resolved_model_path)."""
+    if os.path.isdir(model_path):
+        run_dir = model_path
+        best = os.path.join(run_dir, "best_model.zip")
+        final = os.path.join(run_dir, "model.zip")
+        if prefer_best and os.path.exists(best):
+            return run_dir, best
+        if os.path.exists(final):
+            return run_dir, final
+        raise FileNotFoundError(f"No model.zip or best_model.zip in {run_dir}")
+    # explicit file path: take its dirname as run_dir
+    return os.path.dirname(model_path), model_path
+
+
+def load_config(run_dir: str):
     cfg_path = os.path.join(run_dir, "config.json")
     if os.path.exists(cfg_path):
         with open(cfg_path, "r") as f:
@@ -60,14 +76,12 @@ def build_env(ohlcv: dict, env_cfg, reward_fn, feature_fn, seed=0):
     return Monitor(env)
 
 
-def rollout(model, env, deterministic=True):
-    obs, info = env.reset()
-    done = False
-    while not done:
-        action, _ = model.predict(obs, deterministic=deterministic)
-        obs, reward, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
-    return env.unwrapped.get_history_df()
+def _model_class_from_cfg(cfg):
+    algo = cfg.get("rl", {}).get("algo", "PPO")
+    if algo == "RecurrentPPO":
+        from sb3_contrib import RecurrentPPO
+        return RecurrentPPO
+    return PPO
 
 
 def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost_model: str, rf_rate: float = 0.0):
@@ -130,25 +144,30 @@ def equal_weight_baseline(df: pd.DataFrame, window: int, trans_cost: float, cost
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--model_path", required=True)
+    p.add_argument("--model_path", required=True,
+                   help="Path to a run directory or a specific .zip model file.")
     p.add_argument("--test_prefix", default="data/price_test")
     p.add_argument("--out_dir", default=None)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--prefer_best", type=int, default=1, choices=[0, 1],
+                   help="If --model_path is a run dir, prefer best_model.zip over model.zip.")
     args = p.parse_args()
 
-    cfg = load_config(args.model_path)
+    run_dir, model_path = _resolve_run_dir_and_model(args.model_path, prefer_best=bool(args.prefer_best))
+
+    cfg = load_config(run_dir)
     if cfg is None:
-        raise FileNotFoundError("config.json not found next to model. Provide a run directory with config.json.")
+        raise FileNotFoundError(f"config.json not found at {run_dir}.")
 
     if args.out_dir is None:
-        args.out_dir = os.path.join(os.path.dirname(args.model_path), "eval")
+        args.out_dir = os.path.join(run_dir, "eval")
     os.makedirs(args.out_dir, exist_ok=True)
 
     test_ohlcv = load_ohlcv(args.test_prefix)
 
     # load feature normalizer fit at train time. Must exist next to the model;
     # raising here instead of silently fitting on test prevents look-ahead bias.
-    normalizer_path = os.path.join(os.path.dirname(args.model_path), "feature_normalizer.json")
+    normalizer_path = os.path.join(run_dir, "feature_normalizer.json")
     if not os.path.exists(normalizer_path):
         raise FileNotFoundError(
             f"feature_normalizer.json not found at {normalizer_path}. "
@@ -162,9 +181,11 @@ def main():
 
     env = build_env(test_ohlcv, env_cfg, reward_fn, feature_fn, seed=args.seed)
 
-    model = PPO.load(args.model_path, env=env)
+    ModelCls = _model_class_from_cfg(cfg)
+    model = ModelCls.load(model_path, env=env)
+    print(f"[eval] loaded {ModelCls.__name__} from {model_path}")
 
-    hist = rollout(model, env, deterministic=True)
+    hist = threaded_rollout(model, env, deterministic=True)
     hist.to_csv(os.path.join(args.out_dir, "eval_history.csv"), index=False)
 
     rl_equity = pd.Series(hist["value"].to_numpy(), name="rl_portfolio")

@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 import csv
+import os
 import pandas as pd
 import yfinance as yf
 
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+
 def build_price_splits(in_csv="data/company_prices.csv"):
+    os.makedirs(OUT_DIR, exist_ok=True)
     # tickers are on 3rd line (index 2), from 2nd column (index 1)
     with open(in_csv, newline="", encoding="utf-8-sig") as f:
         r = csv.reader(f)
@@ -45,7 +50,7 @@ def build_price_splits(in_csv="data/company_prices.csv"):
                 df = df.to_frame(tickers[0])
             df = df.reindex(columns=tickers).reset_index()
             df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
-            df.to_csv(f"price_{name}_{label}.csv", index=False)
+            df.to_csv(os.path.join(OUT_DIR, f"price_{name}_{label}.csv"), index=False)
 
         # Legacy close-only file kept as a fallback for the close-only smoke path.
         legacy = data["Close"]
@@ -53,7 +58,7 @@ def build_price_splits(in_csv="data/company_prices.csv"):
             legacy = legacy.to_frame(tickers[0])
         legacy = legacy.reindex(columns=tickers).reset_index()
         legacy["Date"] = pd.to_datetime(legacy["Date"]).dt.strftime("%Y-%m-%d")
-        legacy.to_csv(f"price_{name}_data.csv", index=False)
+        legacy.to_csv(os.path.join(OUT_DIR, f"price_{name}_data.csv"), index=False)
 
 if __name__ == "__main__":
     build_price_splits()
